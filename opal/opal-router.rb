@@ -1,72 +1,132 @@
-class Router
-  attr_reader :path, :routes
+require 'opal-jquery'
+require 'singleton'
+require 'observer'
 
-  def initialize
-    @routes = []
-    @location = $global.location
+module Router
 
-    $global.addEventListener 'hashchange', -> { update }, false
-  end
+  class SessionCookie
+    include Singleton
+    include Observable
 
-  def route path, &handler
-    route = Route.new(path, &handler)
-    @routes << route
-    route
-  end
-
-  def update
-    @path = @location.hash.sub(/^#*/, '')
-
-    match @path
-  end
-
-  def match path
-    @routes.find { |r| r.match path }
-  end
-
-  # Navigate to the given hash location. This adds the '#' 
-  # fragment to the start of the path
-  def navigate path
-    @location.hash = "##{path}"
-  end
-
-  class Route
-
-    # Regexp for matching named params in path
-    NAMED = /:(\w+)/
-
-    # Regexp for matching named splats in path
-    SPLAT = /\\\*(\w+)/
-
-    attr_reader :regexp, :named
-
-    def initialize pattern, &handler
-      @named, @handler = [], handler
-
-      pattern = Regexp.escape pattern
-
-      pattern.gsub(NAMED) { |m| @named << m[1..-1] }
-      pattern.gsub(SPLAT) { |m| @named << m[2..-1] }
-
-      pattern = pattern.gsub NAMED, "([^\\/]*)"
-      pattern = pattern.gsub SPLAT, "(.*?)"
-
-      @regexp = Regexp.new "^#{pattern}$"
+    def initialize
+      Document.ready? do
+        if logged_in?
+          changed
+          notify_observers :logged_in
+        end
+      end
     end
 
-    # Return a hash of all named parts to values if route matches path, or
-    # nil otherwise
-    def match path
-      if match = @regexp.match(path)
-        params = {}
-        @named.each_with_index { |name, i| params[name] = match[i + 1] }
+    def login
+      `document.cookie = 'logged_in=true'`
+      changed
+      notify_observers :logged_in
+    end
 
-        @handler.call params if @handler
+    def logout
+      `document.cookie = 'logged_in=false'`
+      changed
+      notify_observers :logged_out
+    end
 
-        return true
+    def logged_in?
+      match = `document.cookie`.scan(/logged_in=([^;]*)/)
+      return false if match.empty?
+      logged_in = match.flatten.first
+      logged_in == 'true'
+    end
+
+  end
+
+
+  def self.configure
+    yield routes if block_given?
+    raise 'no default route set' unless routes.default_route
+  end
+
+  def self.add_path_observer(observer)
+    raise 'no route defined, configure routes first' if @routes.nil?
+    @routes.add_observer(observer, :path_update)
+  end
+
+  def self.add_login_observer(observer)
+    SessionCookie.instance.add_observer(observer, :login_update)
+  end
+
+  def self.login
+    SessionCookie.instance.login
+    @routes.redirect_to @default_route
+  end
+
+  def self.logout
+    SessionCookie.instance.logout
+    @routes.redirect_to @auth_route
+  end
+
+  private
+
+  def self.routes
+    @routes ||= Routes.new
+  end
+
+  class Routes
+    include Observable
+    attr_reader :default_route
+    attr_reader :auth_route
+
+    def initialize
+      @routes = []
+
+      $global.addEventListener 'hashchange', -> { update }, false
+      Document.ready? do
+        update
       end
 
-      false
     end
-  end
-end
+
+    def add(route, param = :standard)
+      @routes << {route: route, param: param}
+      @auth_route    = route if param == :auth
+      @default_route = route if param == :default
+    end
+
+    def redirect_to path
+      $global.location.hash = "#/#{path}"
+    end
+
+    def current_path
+      $global.location.hash.sub(/^#\/*/, '')
+    end
+
+    private
+
+    def update
+
+      # redirect to login page if needed
+      if @auth_route
+        if current_path != @auth_route
+          # list of public routes where we doesn't need to be logged in
+          public_routes = @routes.map{|r| r[:route] if r[:param]==:public}.compact
+          unless public_routes.include?(current_path)
+            unless SessionCookie.instance.logged_in? # are we logged in?
+              redirect_to @auth_route
+              return
+            end
+          end
+        end
+      end
+
+      # redirect to default route if the route doesn't exist
+      unless @routes.map{|r| r[:route]}.include?(current_path)
+        redirect_to @default_route
+        return
+      end
+
+      # Call Ruby Observer methods
+      changed
+      notify_observers current_path
+
+    end # update
+
+  end # Route
+end # Router
