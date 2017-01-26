@@ -33,7 +33,9 @@ end
 ```
 
 ```:auth```    if you define an ```:auth``` route, this will be the default route when you are not logged in, every other route (unless ```:public```) will redirect here
+
 ```:public```  this is a public route, you can reach it even if you are not logged in
+
 ```:default``` this is the default route, every wrong route will redirect here. If you define an ```:auth``` route and you are not logged in, it will redirect to the ```:auth``` route
 
 Into any opal file you now can do:
